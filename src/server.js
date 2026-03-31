@@ -114,6 +114,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     success: true,
     message: "API funcionando correctamente",
+    sucursal: "Maxikiosco Tuc",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development",
   })
@@ -122,7 +123,8 @@ app.get("/api/health", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "Sistema Colector de Datos - API",
+    message: "Sistema Colector de Datos - Maxikiosco Tuc (API)",
+    sucursal: "Maxikiosco Tuc",
     version: "1.0.0",
     status: "online",
   })

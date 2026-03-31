@@ -1,7 +1,7 @@
 {
-  "name": "backend",
+  "name": "colector-maxikiosco-tuc-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "API colector de datos — sucursal Maxikiosco Tuc",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
