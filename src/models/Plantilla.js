@@ -164,6 +164,61 @@ class Plantilla {
 
     return result.affectedRows > 0
   }
+
+  // Actualiza cabecera y reemplaza todas las filas de plantilla_productos en una transacción
+  static async syncCompleto(id, data) {
+    const { nombre, descripcion, productos } = data
+    const connection = await pool.getConnection()
+
+    try {
+      await connection.beginTransaction()
+
+      const [upd] = await connection.execute(
+        "UPDATE plantillas SET nombre = ?, descripcion = ?, fecha_actualizacion = NOW() WHERE id = ?",
+        [nombre, descripcion ?? "", id],
+      )
+
+      if (upd.affectedRows === 0) {
+        await connection.rollback()
+        return { ok: false, code: "NOT_FOUND" }
+      }
+
+      await connection.execute("DELETE FROM plantilla_productos WHERE plantilla_id = ?", [id])
+
+      if (productos.length > 0) {
+        const uniqueIds = [...new Set(productos.map((p) => p.producto_id))]
+        if (uniqueIds.length !== productos.length) {
+          await connection.rollback()
+          return { ok: false, code: "DUPLICATE_PRODUCTOS" }
+        }
+
+        const placeholders = uniqueIds.map(() => "?").join(",")
+        const [existing] = await connection.execute(`SELECT id FROM productos WHERE id IN (${placeholders})`, uniqueIds)
+
+        if (existing.length !== uniqueIds.length) {
+          await connection.rollback()
+          return { ok: false, code: "INVALID_PRODUCTOS" }
+        }
+
+        let orden = 1
+        for (const p of productos) {
+          await connection.execute(
+            "INSERT INTO plantilla_productos (plantilla_id, producto_id, cantidad_deseada, orden) VALUES (?, ?, ?, ?)",
+            [id, p.producto_id, p.cantidad_deseada, orden],
+          )
+          orden++
+        }
+      }
+
+      await connection.commit()
+      return { ok: true }
+    } catch (error) {
+      await connection.rollback()
+      throw error
+    } finally {
+      connection.release()
+    }
+  }
 }
 
 export default Plantilla
