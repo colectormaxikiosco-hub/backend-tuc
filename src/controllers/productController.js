@@ -148,32 +148,74 @@ export const uploadExcel = async (req, res, next) => {
       })
     }
 
-    // Mapear datos del Excel al formato de la base de datos
-    // Mapeo: Codigo -> codigo, Descripcion -> nombre, Rubro -> categoria, Stock -> stock_sistema
-    const products = data.map((row) => ({
-      codigo: String(row.Codigo || row.codigo || row.CODIGO || "").trim(),
-      nombre: String(row.Descripcion || row.descripcion || row.DESCRIPCION || row.Nombre || row.nombre || "").trim(),
-      categoria: String(row.Rubro || row.rubro || row.RUBRO || row.Categoria || row.categoria || "").trim(),
-      stock_sistema: Number.parseInt(row.Stock || row.stock || row.STOCK || 0) || 0,
-      precio: Number.parseFloat(row.Precio || row.precio || row.PRECIO || 0) || 0,
-    }))
+    const skippedInvalid = []
 
-    // Validar que todos los productos tengan código y nombre
-    const invalidProducts = products.filter((p) => !p.codigo || !p.nombre)
-    if (invalidProducts.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `${invalidProducts.length} productos no tienen código o nombre válido`,
+    const products = data.map((row, idx) => {
+      const codigo = String(row.Codigo || row.codigo || row.CODIGO || "").trim()
+      const nombre = String(row.Descripcion || row.descripcion || row.DESCRIPCION || row.Nombre || row.nombre || "").trim()
+      const categoria = String(row.Rubro || row.rubro || row.RUBRO || row.Categoria || row.categoria || "").trim()
+      const stock_sistema = Number.parseInt(row.Stock || row.stock || row.STOCK || 0, 10) || 0
+      const precio = Number.parseFloat(row.Precio || row.precio || row.PRECIO || 0) || 0
+      return { rowNumber: idx + 2, codigo, nombre, categoria, stock_sistema, precio }
+    })
+
+    const validProducts = []
+    for (const p of products) {
+      if (!p.codigo || !p.nombre) {
+        const reasons = []
+        if (!p.codigo) reasons.push("falta código")
+        if (!p.nombre) reasons.push("falta nombre o descripción")
+        skippedInvalid.push({
+          fila: p.rowNumber,
+          codigo: p.codigo || "—",
+          nombre: p.nombre || "—",
+          motivo: reasons.join("; "),
+        })
+        continue
+      }
+      validProducts.push({
+        codigo: p.codigo,
+        nombre: p.nombre,
+        categoria: p.categoria,
+        stock_sistema: p.stock_sistema,
+        precio: p.precio,
       })
     }
 
-    // Insertar/actualizar productos en la base de datos
-    await Product.createBulk(products)
+    if (validProducts.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No hay filas válidas para importar (todas carecen de código o nombre)",
+        data: {
+          report: {
+            mode: "full",
+            totalFilasArchivo: data.length,
+            procesadosOk: 0,
+            insertados: 0,
+            actualizados: 0,
+            filasOmitidas: skippedInvalid,
+            productosSinStock: [],
+          },
+        },
+      })
+    }
+
+    const bulkResult = await Product.createBulk(validProducts)
 
     res.json({
       success: true,
-      message: `${products.length} productos cargados/actualizados exitosamente`,
-      data: { total: products.length },
+      message: `Importación completada: ${bulkResult.inserted} nuevos, ${bulkResult.updated} actualizados`,
+      data: {
+        report: {
+          mode: "full",
+          totalFilasArchivo: data.length,
+          procesadosOk: bulkResult.processed,
+          insertados: bulkResult.inserted,
+          actualizados: bulkResult.updated,
+          filasOmitidas: skippedInvalid,
+          productosSinStock: bulkResult.zeroStockProducts,
+        },
+      },
     })
   } catch (error) {
     next(error)
@@ -203,28 +245,82 @@ export const updateStockFromExcel = async (req, res, next) => {
       })
     }
 
-    // Mapear solo código y stock
-    const stockUpdates = data.map((row) => ({
-      codigo: String(row.Codigo || row.codigo || row.CODIGO || "").trim(),
-      stock_sistema: Number.parseInt(row.Stock || row.stock || row.STOCK || 0) || 0,
-    }))
+    const skippedInvalid = []
 
-    // Validar que todos tengan código
-    const invalid = stockUpdates.filter((p) => !p.codigo)
-    if (invalid.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `${invalid.length} filas no tienen código válido`,
+    const stockUpdates = data.map((row, idx) => {
+      const codigo = String(row.Codigo || row.codigo || row.CODIGO || "").trim()
+      const stock_sistema = Number.parseInt(row.Stock || row.stock || row.STOCK || 0, 10) || 0
+      const descripcionArchivo = String(
+        row.Descripcion || row.descripcion || row.DESCRIPCION || row.Nombre || row.nombre || "",
+      ).trim()
+      return {
+        rowNumber: idx + 2,
+        codigo,
+        stock_sistema,
+        descripcionArchivo: descripcionArchivo || null,
+      }
+    })
+
+    const validUpdates = []
+    for (const row of stockUpdates) {
+      if (!row.codigo) {
+        skippedInvalid.push({
+          fila: row.rowNumber,
+          codigo: "—",
+          nombre: row.descripcionArchivo || "—",
+          motivo: "falta código",
+        })
+        continue
+      }
+      validUpdates.push({
+        codigo: row.codigo,
+        stock_sistema: row.stock_sistema,
+        descripcionArchivo: row.descripcionArchivo,
       })
     }
 
-    // Actualizar stock en la base de datos
-    const updated = await Product.updateStockBulk(stockUpdates)
+    if (validUpdates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No hay filas con código válido para actualizar stock",
+        data: {
+          report: {
+            mode: "stock",
+            totalFilasArchivo: data.length,
+            actualizadosEnBd: 0,
+            sinCoincidencia: [],
+            filasOmitidas: skippedInvalid,
+            productosSinStockEnArchivo: [],
+          },
+        },
+      })
+    }
+
+    const stockResult = await Product.updateStockBulk(validUpdates)
+
+    const sinStockEnArchivo = validUpdates.filter((u) => u.stock_sistema === 0).map((u) => ({
+      codigo: u.codigo,
+      nombre: u.descripcionArchivo || null,
+    }))
 
     res.json({
       success: true,
-      message: `Stock actualizado para ${updated} productos`,
-      data: { total: updated },
+      message: `Stock actualizado en ${stockResult.updated} productos`,
+      data: {
+        report: {
+          mode: "stock",
+          totalFilasArchivo: data.length,
+          intentosValidos: validUpdates.length,
+          actualizadosEnBd: stockResult.updated,
+          sinCoincidencia: stockResult.notFound.map((n) => ({
+            codigo: n.codigo,
+            nombreArchivo: n.descripcionArchivo || null,
+            motivo: "No existe un producto con este código en la base de datos",
+          })),
+          filasOmitidas: skippedInvalid,
+          productosSinStockEnArchivo: sinStockEnArchivo,
+        },
+      },
     })
   } catch (error) {
     next(error)

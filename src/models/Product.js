@@ -17,41 +17,51 @@ class Product {
   static async createBulk(products) {
     const connection = await pool.getConnection()
 
+    const zeroStockProducts = []
+    let inserted = 0
+    let updated = 0
+
     try {
       await connection.beginTransaction()
 
-      // Procesar en lotes de 100 para mejor rendimiento
       const batchSize = 100
-      let processed = 0
 
       for (let i = 0; i < products.length; i += batchSize) {
         const batch = products.slice(i, i + batchSize)
 
         for (const product of batch) {
           const { codigo, nombre, categoria, stock_sistema, precio } = product
+          const stock = stock_sistema ?? 0
 
-          // Verificar si el producto ya existe
+          if (stock === 0) {
+            zeroStockProducts.push({ codigo, nombre })
+          }
+
           const [existing] = await connection.execute("SELECT id FROM productos WHERE codigo = ?", [codigo])
 
           if (existing.length > 0) {
-            // Actualizar producto existente
             await connection.execute(
               "UPDATE productos SET nombre = ?, categoria = ?, stock_sistema = ?, precio = ?, fecha_actualizacion = NOW() WHERE codigo = ?",
-              [nombre, categoria, stock_sistema, precio, codigo],
+              [nombre, categoria, stock, precio, codigo],
             )
+            updated++
           } else {
-            // Crear nuevo producto
             await connection.execute(
               "INSERT INTO productos (codigo, nombre, categoria, stock_sistema, precio) VALUES (?, ?, ?, ?, ?)",
-              [codigo, nombre, categoria, stock_sistema, precio],
+              [codigo, nombre, categoria, stock, precio],
             )
+            inserted++
           }
-          processed++
         }
       }
 
       await connection.commit()
-      return processed
+      return {
+        processed: products.length,
+        inserted,
+        updated,
+        zeroStockProducts,
+      }
     } catch (error) {
       await connection.rollback()
       throw error
@@ -115,7 +125,7 @@ class Product {
     return result.affectedRows > 0
   }
 
-  // Actualizar solo stock en lote
+  // Actualizar solo stock en lote — devuelve conteo y códigos sin coincidencia en BD
   static async updateStockBulk(stockUpdates) {
     const connection = await pool.getConnection()
 
@@ -123,8 +133,8 @@ class Product {
       await connection.beginTransaction()
 
       let updated = 0
+      const notFound = []
 
-      // Procesar en lotes de 100
       const batchSize = 100
       for (let i = 0; i < stockUpdates.length; i += batchSize) {
         const batch = stockUpdates.slice(i, i + batchSize)
@@ -139,12 +149,21 @@ class Product {
 
           if (result.affectedRows > 0) {
             updated++
+          } else {
+            notFound.push({
+              codigo,
+              descripcionArchivo: item.descripcionArchivo || null,
+            })
           }
         }
       }
 
       await connection.commit()
-      return updated
+      return {
+        updated,
+        notFound,
+        totalAttempted: stockUpdates.length,
+      }
     } catch (error) {
       await connection.rollback()
       throw error
