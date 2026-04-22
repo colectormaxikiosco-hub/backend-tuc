@@ -253,11 +253,16 @@ export const updateStockFromExcel = async (req, res, next) => {
       const descripcionArchivo = String(
         row.Descripcion || row.descripcion || row.DESCRIPCION || row.Nombre || row.nombre || "",
       ).trim()
+      const categoriaArchivo = String(row.Rubro || row.rubro || row.RUBRO || row.Categoria || row.categoria || "").trim()
+      const precioRaw = row.Precio ?? row.precio ?? row.PRECIO
+      const precioArchivo = precioRaw === undefined || precioRaw === null || precioRaw === "" ? null : Number.parseFloat(precioRaw)
       return {
         rowNumber: idx + 2,
         codigo,
         stock_sistema,
         descripcionArchivo: descripcionArchivo || null,
+        categoriaArchivo: categoriaArchivo || null,
+        precioArchivo: Number.isFinite(precioArchivo) ? precioArchivo : null,
       }
     })
 
@@ -276,6 +281,8 @@ export const updateStockFromExcel = async (req, res, next) => {
         codigo: row.codigo,
         stock_sistema: row.stock_sistema,
         descripcionArchivo: row.descripcionArchivo,
+        categoriaArchivo: row.categoriaArchivo,
+        precioArchivo: row.precioArchivo,
       })
     }
 
@@ -305,17 +312,18 @@ export const updateStockFromExcel = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: `Stock actualizado en ${stockResult.updated} productos`,
+      message: `Actualización completada: ${stockResult.updated} actualizados, ${stockResult.inserted} agregados`,
       data: {
         report: {
           mode: "stock",
           totalFilasArchivo: data.length,
           intentosValidos: validUpdates.length,
           actualizadosEnBd: stockResult.updated,
+          insertados: stockResult.inserted,
           sinCoincidencia: stockResult.notFound.map((n) => ({
             codigo: n.codigo,
             nombreArchivo: n.descripcionArchivo || null,
-            motivo: "No existe un producto con este código en la base de datos",
+            motivo: n.motivo || "No se pudo procesar esta fila",
           })),
           filasOmitidas: skippedInvalid,
           productosSinStockEnArchivo: sinStockEnArchivo,

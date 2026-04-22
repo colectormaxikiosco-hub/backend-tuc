@@ -133,6 +133,7 @@ class Product {
       await connection.beginTransaction()
 
       let updated = 0
+      let inserted = 0
       const notFound = []
 
       const batchSize = 100
@@ -140,20 +141,47 @@ class Product {
         const batch = stockUpdates.slice(i, i + batchSize)
 
         for (const item of batch) {
-          const { codigo, stock_sistema } = item
+          const { codigo, stock_sistema, descripcionArchivo, categoriaArchivo, precioArchivo } = item
 
-          const [result] = await connection.execute(
-            "UPDATE productos SET stock_sistema = ?, fecha_actualizacion = NOW() WHERE codigo = ?",
-            [stock_sistema, codigo],
+          const [existingRows] = await connection.execute(
+            "SELECT id, nombre, categoria, precio FROM productos WHERE codigo = ? LIMIT 1",
+            [codigo],
           )
 
-          if (result.affectedRows > 0) {
+          if (existingRows.length > 0) {
+            const existing = existingRows[0]
+            const nombreFinal = descripcionArchivo || existing.nombre
+            const categoriaFinal = categoriaArchivo || existing.categoria || ""
+            const precioFinal =
+              Number.isFinite(precioArchivo) && precioArchivo !== null && precioArchivo >= 0
+                ? precioArchivo
+                : existing.precio ?? 0
+
+            await connection.execute(
+              "UPDATE productos SET nombre = ?, categoria = ?, stock_sistema = ?, precio = ?, fecha_actualizacion = NOW() WHERE codigo = ?",
+              [nombreFinal, categoriaFinal, stock_sistema, precioFinal, codigo],
+            )
             updated++
           } else {
-            notFound.push({
-              codigo,
-              descripcionArchivo: item.descripcionArchivo || null,
-            })
+            if (!descripcionArchivo) {
+              notFound.push({
+                codigo,
+                descripcionArchivo: null,
+                motivo:
+                  "No existe en la base y no se puede crear porque falta nombre/descripción en el archivo",
+              })
+              continue
+            }
+
+            const categoriaFinal = categoriaArchivo || ""
+            const precioFinal =
+              Number.isFinite(precioArchivo) && precioArchivo !== null && precioArchivo >= 0 ? precioArchivo : 0
+
+            await connection.execute(
+              "INSERT INTO productos (codigo, nombre, categoria, stock_sistema, precio) VALUES (?, ?, ?, ?, ?)",
+              [codigo, descripcionArchivo, categoriaFinal, stock_sistema, precioFinal],
+            )
+            inserted++
           }
         }
       }
@@ -161,6 +189,7 @@ class Product {
       await connection.commit()
       return {
         updated,
+        inserted,
         notFound,
         totalAttempted: stockUpdates.length,
       }
